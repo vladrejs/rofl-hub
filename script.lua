@@ -1,15 +1,43 @@
 --[[
     ============================================
-        Rofl Hub  |  v1.2  (PC ONLY)
+        Rofl Hub  |  v1.3  (PC ONLY)
         Made for FTAP (Roblox)
         
+        - Fun tab: Anchored (B key)
+          → freezes item in air at its current position
+          → NO NOCLIP — object collides with map normally
+          → RenderStepped recovery (every frame, not 0.02s)
+          → instant ownership reclaim (SetNetworkOwner + CFrame)
+          → soft orientation — no sharp rotation
+          → angle restore if rotated >30°
+          → MAP PROTECTION
         - Skybox in Visuals (27 skyboxes)
         - FOV slider, Fullbright, No Shadows, Time
         - ESP system with full customization
-        - Fun tab placeholder
-        - Modal button trick for cursor
     ============================================
 ]]
+
+-- === ERROR HANDLER ===
+local StarterGui = game:GetService("StarterGui")
+
+local function notify(title, text, duration)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = tostring(text):sub(1, 200),
+            Duration = duration or 10,
+        })
+    end)
+end
+
+local function log(msg)
+    print("[Rofl Hub] " .. tostring(msg))
+end
+
+log("Script started")
+
+-- === MAIN SCRIPT ===
+local ok, err = pcall(function()
 
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -21,16 +49,21 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local Camera      = workspace.CurrentCamera
 
+log("Variables loaded")
+
 -- CLEANUP
+for _, obj in ipairs(workspace:GetDescendants()) do
+    if obj.Name == "RoflAnchoredPos" or obj.Name == "RoflAnchoredOr"
+    or obj.Name == "RoflAnchoredAtt" then
+        pcall(function() obj:Destroy() end)
+    end
+end
+
 for _, p in ipairs(Players:GetPlayers()) do
     if p.Character then
         for _, obj in ipairs(p.Character:GetDescendants()) do
-            if obj:IsA("Highlight") then
-                pcall(function() obj:Destroy() end)
-            end
-            if obj:IsA("BillboardGui") then
-                pcall(function() obj:Destroy() end)
-            end
+            if obj:IsA("Highlight") then pcall(function() obj:Destroy() end) end
+            if obj:IsA("BillboardGui") then pcall(function() obj:Destroy() end) end
             if obj.Name == "RoflESP" or obj.Name == "RoflESPTag" then
                 pcall(function() obj:Destroy() end)
             end
@@ -38,17 +71,9 @@ for _, p in ipairs(Players:GetPlayers()) do
     end
 end
 
-for _, obj in ipairs(workspace:GetDescendants()) do
-    if obj:IsA("Highlight") and (obj.Name == "RoflESP" or string.find(string.lower(obj.Name), "esp")) then
-        pcall(function() obj:Destroy() end)
-    end
-end
-
---------------------------------------------------------------------
 -- CONFIG
---------------------------------------------------------------------
 local HUB_NAME      = "Rofl Hub"
-local HUB_VERSION   = "v1.2"
+local HUB_VERSION   = "v1.3"
 
 local THEMES = {
     Blue   = { main = Color3.fromRGB(120, 170, 255), dark = Color3.fromRGB(70, 120, 200)  },
@@ -106,9 +131,7 @@ local ORIGINAL_LIGHTING = {
     OutdoorAmbient = Lighting.OutdoorAmbient,
 }
 
---------------------------------------------------------------------
 -- SKYBOX ASSETS (27 SKYBOXES)
---------------------------------------------------------------------
 local SKYBOX_ASSETS = {
     ["Black Storm"] = {
         Bk = "rbxassetid://15502511288", Dn = "rbxassetid://15502508460",
@@ -262,9 +285,7 @@ do
     end
 end
 
---------------------------------------------------------------------
 -- STATE
---------------------------------------------------------------------
 local activeTabName = "Visuals"
 local tabButtons, sections, themeButtons = {}, {}, {}
 local themeTargets  = {}
@@ -275,6 +296,11 @@ local skyboxDropdownRef = nil
 
 local openDropdowns = {}
 local ignoreGlobalClickUntil = 0
+
+-- Anchored
+local anchoredEnabled = true
+local anchoredKey = Enum.KeyCode.B
+local anchoredTargets = {}
 
 local function markIgnoreNextClicks(dur)
     ignoreGlobalClickUntil = tick() + (dur or 0.1)
@@ -318,9 +344,7 @@ local function targetLabelText()
     return "Selected: " .. tostring(count)
 end
 
---------------------------------------------------------------------
 -- SKYBOX FUNCTIONS
---------------------------------------------------------------------
 local function applySkybox(skyboxName)
     local data = SKYBOX_ASSETS[skyboxName]
     if not data then return end
@@ -367,9 +391,269 @@ local function restoreDefaultSky()
     end
 end
 
---------------------------------------------------------------------
+-- ANCHORED SYSTEM
+local SetNetworkOwnerRemote = nil
+
+local function findSetNetworkOwnerRemote()
+    if SetNetworkOwnerRemote and SetNetworkOwnerRemote.Parent then
+        return SetNetworkOwnerRemote
+    end
+    local ok, r = pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local grabEvents = rs:FindFirstChild("GrabEvents")
+        if grabEvents then
+            local remote = grabEvents:FindFirstChild("SetNetworkOwner")
+            if remote then
+                SetNetworkOwnerRemote = remote
+                return remote
+            end
+        end
+        return nil
+    end)
+    if ok then return r end
+    return nil
+end
+
+local function findCurrentlyHeldPart()
+    local ok, part = pcall(function()
+        local grabParts = workspace:FindFirstChild("GrabParts")
+        if not grabParts then return nil end
+        local grabPart = grabParts:FindFirstChild("GrabPart")
+        if not grabPart then return nil end
+        local weld = grabPart:FindFirstChild("WeldConstraint")
+        if not weld then return nil end
+        return weld.Part1
+    end)
+    if ok then return part end
+    return nil
+end
+
+local function isMapPart(part)
+    if not part then return false end
+    local map = workspace:FindFirstChild("Map")
+    if map then
+        local current = part
+        while current do
+            if current == map then return true end
+            current = current.Parent
+        end
+    end
+    if part:IsA("BasePart") and part.Size.Magnitude > 100 then
+        return true
+    end
+    return false
+end
+
+local function forceOwnership(part)
+    if not part or not part.Parent then return end
+    local remote = findSetNetworkOwnerRemote()
+    if not remote then return end
+    pcall(function()
+        remote:FireServer(part, part.CFrame)
+    end)
+end
+
+local function attachHold(part)
+    if not part or not part.Parent then return nil end
+
+    local ok, entry = pcall(function()
+        local fixedPos = part.Position
+        local fixedCF = part.CFrame
+
+        pcall(function()
+            local old = part:FindFirstChild("RoflAnchoredAtt")
+            if old then old:Destroy() end
+        end)
+        pcall(function()
+            local old = part:FindFirstChild("RoflAnchoredPos")
+            if old then old:Destroy() end
+        end)
+        pcall(function()
+            local old = part:FindFirstChild("RoflAnchoredOr")
+            if old then old:Destroy() end
+        end)
+
+        local att = Instance.new("Attachment")
+        att.Name = "RoflAnchoredAtt"
+        att.Parent = part
+
+        local ap = Instance.new("AlignPosition")
+        ap.Name = "RoflAnchoredPos"
+        ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+        ap.Attachment0 = att
+        ap.Position = fixedPos
+        ap.MaxForce = 5000000
+        ap.MaxVelocity = 500
+        ap.Responsiveness = 200
+        ap.ApplyAtCenterOfMass = true
+        ap.Parent = part
+
+        local ao = Instance.new("AlignOrientation")
+        ao.Name = "RoflAnchoredOr"
+        ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        ao.Attachment0 = att
+        ao.CFrame = fixedCF
+        ao.MaxTorque = 2000000
+        ao.MaxAngularVelocity = 100
+        ao.Responsiveness = 200
+        ao.Parent = part
+
+        -- NOCLIP УБРАН — объект сталкивается с картой как обычно
+        pcall(function()
+            part.Anchored = false
+        end)
+
+        return {
+            alignPos = ap,
+            alignOr = ao,
+            att = att,
+            part = part,
+            savedCF = fixedCF,
+        }
+    end)
+
+    if ok then return entry end
+    return nil
+end
+
+local function detachHold(entry)
+    if not entry then return end
+    pcall(function() if entry.alignPos then entry.alignPos:Destroy() end end)
+    pcall(function() if entry.alignOr then entry.alignOr:Destroy() end end)
+    pcall(function() if entry.att then entry.att:Destroy() end end)
+end
+
+local function releaseAllAnchored()
+    for part, entry in pairs(anchoredTargets) do
+        detachHold(entry)
+    end
+    anchoredTargets = {}
+end
+
+local function toggleAnchoredGrab()
+    if not anchoredEnabled then return end
+
+    local part = findCurrentlyHeldPart()
+
+    if part and anchoredTargets[part] then
+        detachHold(anchoredTargets[part])
+        anchoredTargets[part] = nil
+        return
+    end
+
+    if part then
+        if isMapPart(part) then
+            showToast("Anchored", "Нельзя морозить карту!")
+            return
+        end
+
+        local entry = attachHold(part)
+        if entry then
+            anchoredTargets[part] = entry
+            forceOwnership(part)
+        end
+        return
+    end
+
+    if next(anchoredTargets) then
+        releaseAllAnchored()
+    end
+end
+
+addConn(UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    if not anchoredEnabled then return end
+    if input.KeyCode == anchoredKey then
+        pcall(toggleAnchoredGrab)
+    end
+end))
+
+-- ============================================================
+-- RECOVERY THREAD (RenderStepped — каждый кадр, без NOCLIP)
+-- Приоритет: мгновенный возврат при потере владения
+-- ============================================================
+addConn(RunService.RenderStepped:Connect(function()
+    if not anchoredEnabled then return end
+    if not next(anchoredTargets) then return end
+
+    for part, entry in pairs(anchoredTargets) do
+        if not part or not part.Parent then
+            anchoredTargets[part] = nil
+        else
+            -- 1. Мгновенно возвращаем владельца, если его увели
+            local partOwner = part:FindFirstChild("PartOwner")
+            local stolen = false
+
+            if partOwner and partOwner.Value ~= LocalPlayer.Name then
+                stolen = true
+            end
+
+            if not stolen then
+                pcall(function()
+                    local ok, owner = pcall(function()
+                        return part:GetNetworkOwner()
+                    end)
+                    if ok and owner and owner ~= LocalPlayer then
+                        stolen = true
+                    end
+                end)
+            end
+
+            if stolen then
+                forceOwnership(part)
+
+                pcall(function()
+                    part.CFrame = CFrame.new(entry.alignPos.Position)
+                        * (entry.savedCF - entry.savedCF.Position)
+                    part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                end)
+
+                pcall(function()
+                    entry.alignPos.Position = entry.savedCF.Position
+                end)
+            else
+                -- 2. Гасим скорость постоянно
+                pcall(function()
+                    if part.AssemblyLinearVelocity.Magnitude > 0.5 then
+                        part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    end
+                    if part.AssemblyAngularVelocity.Magnitude > 0.5 then
+                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end
+                end)
+
+                -- 3. Если сильно ушёл — возвращаем
+                local dist = (part.Position - entry.alignPos.Position).Magnitude
+                if dist > 2 then
+                    pcall(function()
+                        part.CFrame = CFrame.new(entry.alignPos.Position)
+                            * (entry.savedCF - entry.savedCF.Position)
+                        part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end)
+                    forceOwnership(part)
+                end
+
+                -- 4. Мягкое восстановление угла
+                pcall(function()
+                    local currentRot = part.CFrame - part.CFrame.Position
+                    local savedRot = entry.savedCF - entry.savedCF.Position
+                    local dot = currentRot.LookVector:Dot(savedRot.LookVector)
+                    dot = math.clamp(dot, -1, 1)
+                    local angleDiff = math.deg(math.acos(dot))
+                    if angleDiff > 30 then
+                        part.CFrame = CFrame.new(part.Position) * savedRot
+                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end
+                end)
+            end
+        end
+    end
+end))
+
 -- SCREEN GUI
---------------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "RoflHub"
 ScreenGui.ResetOnSpawn = false
@@ -390,13 +674,9 @@ ModalBtn.Visible = false
 ModalBtn.ZIndex = 1
 ModalBtn.Parent = ScreenGui
 
---------------------------------------------------------------------
 -- BLUR
---------------------------------------------------------------------
 for _, obj in ipairs(Lighting:GetChildren()) do
-    if obj:IsA("BlurEffect") then
-        pcall(function() obj:Destroy() end)
-    end
+    if obj:IsA("BlurEffect") then pcall(function() obj:Destroy() end) end
 end
 
 local Blur = Instance.new("BlurEffect")
@@ -409,28 +689,17 @@ local blurTween = nil
 
 local function setBlur(target)
     blurTarget = target
-    if blurTween then
-        pcall(function() blurTween:Cancel() end)
-    end
-    blurTween = TweenService:Create(
-        Blur,
-        TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        { Size = target }
-    )
+    if blurTween then pcall(function() blurTween:Cancel() end) end
+    blurTween = TweenService:Create(Blur, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = target })
     blurTween:Play()
 end
 
 addConn(RunService.RenderStepped:Connect(function()
-    if blurTarget > 0 and Blur.Size < 5 then
-        setBlur(blurTarget)
-    elseif blurTarget == 0 and Blur.Size > 5 then
-        setBlur(0)
-    end
+    if blurTarget > 0 and Blur.Size < 5 then setBlur(blurTarget)
+    elseif blurTarget == 0 and Blur.Size > 5 then setBlur(0) end
 end))
 
---------------------------------------------------------------------
 -- TOASTS
---------------------------------------------------------------------
 local toastContainer = Instance.new("Frame")
 toastContainer.Name = "ToastContainer"
 toastContainer.AnchorPoint = Vector2.new(1, 0)
@@ -513,9 +782,7 @@ local function showToast(title, subtitle)
     end)
 end
 
---------------------------------------------------------------------
 -- MAIN WINDOW
---------------------------------------------------------------------
 local Window = Instance.new("Frame")
 Window.Name = "Window"
 Window.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -554,7 +821,6 @@ addConn(RunService.RenderStepped:Connect(function(dt)
 end))
 
 local TopAccent = Instance.new("Frame")
-TopAccent.Name = "TopAccent"
 TopAccent.Size = UDim2.new(1, -40, 0, 1)
 TopAccent.Position = UDim2.new(0, 20, 0, 0)
 TopAccent.BackgroundColor3 = ACCENT
@@ -564,17 +830,7 @@ TopAccent.ZIndex = 5
 TopAccent.Parent = Window
 registerTheme(TopAccent, "BackgroundColor3", "accent")
 
-local TopAccentGrad = Instance.new("UIGradient")
-TopAccentGrad.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 1),
-    NumberSequenceKeypoint.new(0.5, 0),
-    NumberSequenceKeypoint.new(1, 1),
-})
-TopAccentGrad.Parent = TopAccent
-
---------------------------------------------------------------------
 -- DRAG STRIPS
---------------------------------------------------------------------
 local function makeDragStrip(name, size, position)
     local strip = Instance.new("Frame")
     strip.Name = name
@@ -632,9 +888,7 @@ end
 addConn(UserInputService.InputChanged:Connect(updateDrag))
 addConn(UserInputService.InputEnded:Connect(endDrag))
 
---------------------------------------------------------------------
 -- TITLE BAR
---------------------------------------------------------------------
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 52)
 TitleBar.BackgroundColor3 = PANEL_COLOR
@@ -684,14 +938,6 @@ AccentLine.ZIndex = 3
 AccentLine.Parent = TitleBar
 registerTheme(AccentLine, "BackgroundColor3", "accent")
 
-local AccentLineGrad = Instance.new("UIGradient")
-AccentLineGrad.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 1),
-    NumberSequenceKeypoint.new(0.5, 0),
-    NumberSequenceKeypoint.new(1, 1),
-})
-AccentLineGrad.Parent = AccentLine
-
 local LogoFrame = Instance.new("Frame")
 LogoFrame.Size = UDim2.new(0, 32, 0, 32)
 LogoFrame.Position = UDim2.new(0, 14, 0.5, -16)
@@ -707,7 +953,6 @@ LogoCorner.Parent = LogoFrame
 local LogoStroke = Instance.new("UIStroke")
 LogoStroke.Color = ACCENT
 LogoStroke.Thickness = 1.5
-LogoStroke.Transparency = 0.1
 LogoStroke.Parent = LogoFrame
 registerTheme(LogoStroke, "Color", "accent")
 
@@ -724,16 +969,14 @@ LogoImageCorner.CornerRadius = UDim.new(1, 0)
 LogoImageCorner.Parent = LogoImage
 
 task.spawn(function()
-    local ok, url = pcall(function()
-        return Players:GetUserThumbnailAsync(
+    pcall(function()
+        local url = Players:GetUserThumbnailAsync(
             LocalPlayer.UserId,
             Enum.ThumbnailType.HeadShot,
             Enum.ThumbnailSize.Size100x100
         )
+        if url and LogoImage then LogoImage.Image = url end
     end)
-    if ok and url and LogoImage then
-        LogoImage.Image = url
-    end
 end)
 
 local TitleLabel = Instance.new("TextLabel")
@@ -745,61 +988,21 @@ TitleLabel.TextColor3 = TEXT_COLOR
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextSize = 15
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
 TitleLabel.ZIndex = 3
 TitleLabel.Parent = TitleBar
 
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(0, 150, 0, 12)
-StatusLabel.Position = UDim2.new(0, 54, 0, 30)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "● Online"
-StatusLabel.TextColor3 = Color3.fromRGB(120, 230, 140)
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.TextSize = 10
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-StatusLabel.TextYAlignment = Enum.TextYAlignment.Center
-StatusLabel.ZIndex = 3
-StatusLabel.Parent = TitleBar
-
-local VersionPill = Instance.new("Frame")
-VersionPill.Size = UDim2.new(0, 42, 0, 18)
-VersionPill.Position = UDim2.new(0, 158, 0, 17)
-VersionPill.BackgroundColor3 = ACCENT
-VersionPill.BackgroundTransparency = 0.85
-VersionPill.BorderSizePixel = 0
-VersionPill.ZIndex = 3
-VersionPill.Parent = TitleBar
-registerTheme(VersionPill, "BackgroundColor3", "accent")
-
-local VersionPillCorner = Instance.new("UICorner")
-VersionPillCorner.CornerRadius = UDim.new(1, 0)
-VersionPillCorner.Parent = VersionPill
-
 local VersionLabel = Instance.new("TextLabel")
-VersionLabel.Size = UDim2.new(1, 0, 1, 0)
+VersionLabel.Size = UDim2.new(0, 60, 0, 18)
+VersionLabel.Position = UDim2.new(0, 158, 0, 17)
 VersionLabel.BackgroundTransparency = 1
 VersionLabel.Text = HUB_VERSION
 VersionLabel.TextColor3 = ACCENT
 VersionLabel.Font = Enum.Font.GothamBold
-VersionLabel.TextSize = 10
-VersionLabel.ZIndex = 4
-VersionLabel.Parent = VersionPill
+VersionLabel.TextSize = 11
+VersionLabel.TextXAlignment = Enum.TextXAlignment.Left
+VersionLabel.ZIndex = 3
+VersionLabel.Parent = TitleBar
 registerTheme(VersionLabel, "TextColor3", "accent")
-
-local FpsLabel = Instance.new("TextLabel")
-FpsLabel.Size = UDim2.new(0, 70, 0, 20)
-FpsLabel.Position = UDim2.new(1, -145, 0, 16)
-FpsLabel.BackgroundTransparency = 1
-FpsLabel.Text = "FPS: 0"
-FpsLabel.TextColor3 = SUBTEXT_COLOR
-FpsLabel.Font = Enum.Font.GothamBold
-FpsLabel.TextSize = 11
-FpsLabel.TextXAlignment = Enum.TextXAlignment.Right
-FpsLabel.TextYAlignment = Enum.TextYAlignment.Center
-FpsLabel.Visible = false
-FpsLabel.ZIndex = 3
-FpsLabel.Parent = TitleBar
 
 local MinBtn = Instance.new("TextButton")
 MinBtn.Size = UDim2.new(0, 28, 0, 28)
@@ -851,9 +1054,7 @@ addConn(CloseBtn.MouseLeave:Connect(function()
     TweenService:Create(CloseBtn, TweenInfo.new(0.12), {BackgroundTransparency = 0.3, BackgroundColor3 = BTN_COLOR}):Play()
 end))
 
---------------------------------------------------------------------
 -- RIPPLE
---------------------------------------------------------------------
 local function spawnRipple(parentFrame, xRatio, yRatio)
     local ripple = Instance.new("Frame")
     ripple.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -891,9 +1092,7 @@ local function attachRipple(obj)
     end))
 end
 
---------------------------------------------------------------------
 -- SIDEBAR
---------------------------------------------------------------------
 local Sidebar = Instance.new("Frame")
 Sidebar.Size = UDim2.new(0, 155, 1, -80)
 Sidebar.Position = UDim2.new(0, 12, 0, 62)
@@ -924,9 +1123,7 @@ SidebarPad.PaddingLeft = UDim.new(0, 8)
 SidebarPad.PaddingRight = UDim.new(0, 8)
 SidebarPad.Parent = Sidebar
 
---------------------------------------------------------------------
 -- CONTENT
---------------------------------------------------------------------
 local Content = Instance.new("Frame")
 Content.Size = UDim2.new(1, -190, 1, -88)
 Content.Position = UDim2.new(0, 177, 0, 62)
@@ -986,9 +1183,7 @@ ScrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ScrollLayout.Padding = UDim.new(0, 8)
 ScrollLayout.Parent = Scroll
 
---------------------------------------------------------------------
 -- TAB SYSTEM
---------------------------------------------------------------------
 local function fadeInSection(section)
     local snapshots = {}
     for _, obj in ipairs(section:GetDescendants()) do
@@ -1158,9 +1353,7 @@ local function createTab(tabName, iconEmoji)
     return section
 end
 
---------------------------------------------------------------------
 -- WIDGETS
---------------------------------------------------------------------
 local function addLabel(parent, text, subtext)
     local holder = Instance.new("Frame")
     holder.Size = UDim2.new(1, 0, 0, subtext and 46 or 26)
@@ -1414,9 +1607,7 @@ local function addToggle(parent, text, iconEmoji, defaultState, callback)
     return {button = btn, setState = setState, isOn = function() return state end}
 end
 
---------------------------------------------------------------------
 -- DROPDOWN
---------------------------------------------------------------------
 local function addDropdown(parent, labelText, options, defaultIndex, onChanged, config)
     config = config or {}
     local showAvatar = config.showAvatar or false
@@ -1775,9 +1966,7 @@ local function addDropdown(parent, labelText, options, defaultIndex, onChanged, 
     return self
 end
 
---------------------------------------------------------------------
 -- MULTI-SELECT DROPDOWN
---------------------------------------------------------------------
 local function addMultiSelectDropdown(parent, labelText, getOptions, onChanged)
     local holder = Instance.new("Frame")
     holder.Size = UDim2.new(1, 0, 0, 60)
@@ -2174,9 +2363,7 @@ local function addMultiSelectDropdown(parent, labelText, getOptions, onChanged)
     return self
 end
 
---------------------------------------------------------------------
 -- GLOBAL INPUT
---------------------------------------------------------------------
 local function handleGlobalClick(mx, my)
     if tick() < ignoreGlobalClickUntil then return end
 
@@ -2189,7 +2376,8 @@ local function handleGlobalClick(mx, my)
             local bp = b.AbsolutePosition
             local bs = b.AbsoluteSize
             local insideList = mx >= lp.X and mx <= lp.X + ls.X and my >= lp.Y and my <= lp.Y + ls.Y
-            local insideBtn  = mx >= bp.X and mx <= bp.X + bs.X and my >= bp.Y and my <= bp.Y + bs.Y            if not insideList and not insideBtn then
+            local insideBtn  = mx >= bp.X and mx <= bp.X + bs.X and my >= bp.Y and my <= bp.Y + bs.Y
+            if not insideList and not insideBtn then
                 pcall(function() dd.close() end)
             end
         end
@@ -2238,9 +2426,7 @@ addConn(UserInputService.InputChanged:Connect(function(input)
     end
 end))
 
---------------------------------------------------------------------
 -- THEME BUTTON
---------------------------------------------------------------------
 local function addThemeButton(parent, themeName)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 36)
@@ -2317,9 +2503,7 @@ local function addThemeButton(parent, themeName)
     return btn
 end
 
---------------------------------------------------------------------
 -- KEYBIND
---------------------------------------------------------------------
 local function addKeybind(parent, labelText, defaultKey, onChanged)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 38)
@@ -2547,9 +2731,7 @@ local function addResetOption(parent, text)
     }
 end
 
---------------------------------------------------------------------
 -- ESP SYSTEM
---------------------------------------------------------------------
 local espEnabled       = false
 local espShowName      = true
 local espShowDistance  = false
@@ -2737,11 +2919,7 @@ end
 
 local function setESPState(state)
     espEnabled = state
-    if state then
-        refreshAllESP()
-    else
-        clearAllESP()
-    end
+    if state then refreshAllESP() else clearAllESP() end
 end
 
 local function bindPlayer(player)
@@ -2779,7 +2957,6 @@ task.spawn(function()
             for _, p in ipairs(Players:GetPlayers()) do
                 if p ~= LocalPlayer then
                     local hasChar = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-
                     if hasChar and isTargeted(p.Name) then
                         if not hasValidESP(p) then
                             createESPForPlayer(p)
@@ -2815,9 +2992,7 @@ task.spawn(function()
     end
 end)
 
---------------------------------------------------------------------
 -- BUILD TABS
---------------------------------------------------------------------
 local visualsTab  = createTab("Visuals",  "📷")
 local espTab      = createTab("ESP",      "👁")
 local funTab      = createTab("Fun",      "🎮")
@@ -2970,9 +3145,20 @@ local espFillSlider = addSlider(espTab, "Fill Transparency", 0, 100, math.floor(
     reapplyESPVisuals()
 end)
 
--- FUN TAB (placeholder for now)
-addLabel(funTab, "Fun", "Coming soon...")
-addLabel(funTab, "Stay tuned", "New features will appear here soon.")
+-- FUN TAB
+local anchoredToggle = addToggle(funTab, "Anchored", "🧊", true, function(state)
+    anchoredEnabled = state
+    if not state then releaseAllAnchored() end
+end)
+
+addKeybind(funTab, "Anchored Key", anchoredKey, function(newKey)
+    anchoredKey = newKey
+end)
+
+addActionButton(funTab, "Release All", "📤", function()
+    releaseAllAnchored()
+    showToast("Anchored", "All released")
+end)
 
 -- SETTINGS TAB
 addLabel(settingsTab, "Keybind", "Click the box, then press a key")
@@ -3074,9 +3260,7 @@ for _, data in ipairs(tabButtons) do
 end
 sections["Visuals"].Visible = true
 
---------------------------------------------------------------------
 -- THEME
---------------------------------------------------------------------
 local function refreshActiveTabsAnimated()
     for _, data in ipairs(tabButtons) do
         if data.name == activeTabName then
@@ -3159,9 +3343,7 @@ end
 refreshActiveTabsAnimated()
 refreshThemeButtonsAnimated()
 
---------------------------------------------------------------------
 -- RUNTIME STATE
---------------------------------------------------------------------
 local menuOpen       = true
 local savedRotation  = nil
 local camLoopBound   = false
@@ -3191,14 +3373,9 @@ end
 local function stopCamFreeze()
     if not camLoopBound then return end
     camLoopBound = false
-    pcall(function()
-        RunService:UnbindFromRenderStep(CAM_LOCK_NAME)
-    end)
+    pcall(function() RunService:UnbindFromRenderStep(CAM_LOCK_NAME) end)
 end
 
---------------------------------------------------------------------
--- ANIMATIONS
---------------------------------------------------------------------
 local OPEN_TWEEN_1 = TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 local OPEN_TWEEN_2 = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
 local CLOSE_TWEEN  = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
@@ -3233,15 +3410,11 @@ local function openMenu()
     ModalBtn.Visible = true
     ModalBtn.Modal = true
 
-    pcall(function()
-        UserInputService.MouseIconEnabled = true
-    end)
+    pcall(function() UserInputService.MouseIconEnabled = true end)
 
     task.delay(0.05, function()
         if menuOpen then
-            pcall(function()
-                UserInputService.MouseIconEnabled = true
-            end)
+            pcall(function() UserInputService.MouseIconEnabled = true end)
         end
     end)
 
@@ -3249,9 +3422,7 @@ local function openMenu()
     startCamFreeze()
     animateOpen()
 
-    task.delay(0.3, function()
-        transitioning = false
-    end)
+    task.delay(0.3, function() transitioning = false end)
 end
 
 local function closeMenu()
@@ -3266,17 +3437,11 @@ local function closeMenu()
     ModalBtn.Modal = false
     ModalBtn.Visible = false
 
-    pcall(function()
-        UserInputService.MouseIconEnabled = false
-    end)
+    pcall(function() UserInputService.MouseIconEnabled = false end)
 
-    animateClose(function()
-        ScreenGui.Enabled = false
-    end)
+    animateClose(function() ScreenGui.Enabled = false end)
 
-    task.delay(0.3, function()
-        transitioning = false
-    end)
+    task.delay(0.3, function() transitioning = false end)
 end
 
 addConn(UserInputService.InputBegan:Connect(function(input, gpe)
@@ -3301,9 +3466,7 @@ addConn(MinBtn.MouseButton1Click:Connect(function()
             end
         end
         for _, strip in ipairs(dragStrips) do
-            if strip.Name ~= "TopEdge"
-            and strip.Name ~= "TopRight"
-            and strip.Name ~= "TopLeft" then
+            if strip.Name ~= "TopEdge" and strip.Name ~= "TopRight" and strip.Name ~= "TopLeft" then
                 strip.Visible = false
             end
         end
@@ -3332,6 +3495,8 @@ local function unloadAll()
 
     clearAllESP()
     espEnabled = false
+
+    releaseAllAnchored()
 
     pcall(function() Camera.FieldOfView = ORIGINAL_FOV end)
 
@@ -3365,7 +3530,6 @@ local function unloadAll()
     connections = {}
 
     pcall(function() ScreenGui:Destroy() end)
-    print("[Rofl Hub] Unloaded. Everything restored.")
 end
 
 addConn(CloseBtn.MouseButton1Click:Connect(function()
@@ -3381,6 +3545,11 @@ end))
 
 openMenu()
 
-showToast("Rofl Hub " .. HUB_VERSION, "Loaded successfully")
+log("Script finished OK")
 
-print("[Rofl Hub v1.2 PC] Loaded. Toggle key: " .. toggleKey.Name)
+end)
+
+if not ok then
+    notify("ОШИБКА Rofl Hub", tostring(err), 30)
+    warn("[Rofl Hub ERROR] " .. tostring(err))
+end
