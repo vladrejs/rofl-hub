@@ -1,42 +1,10 @@
 --[[
     ============================================
-        Rofl Hub  |  v1.3  (PC ONLY)
+        Rofl Hub  |  v1.5  (PC ONLY)
         Made for FTAP (Roblox)
-        
-        - Fun tab: Anchored (B key)
-          → freezes item in air at its current position
-          → NO NOCLIP — object collides with map normally
-          → RenderStepped recovery (every frame, not 0.02s)
-          → instant ownership reclaim (SetNetworkOwner + CFrame)
-          → soft orientation — no sharp rotation
-          → angle restore if rotated >30°
-          → MAP PROTECTION
-        - Skybox in Visuals (27 skyboxes)
-        - FOV slider, Fullbright, No Shadows, Time
-        - ESP system with full customization
     ============================================
 ]]
 
--- === ERROR HANDLER ===
-local StarterGui = game:GetService("StarterGui")
-
-local function notify(title, text, duration)
-    pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = title,
-            Text = tostring(text):sub(1, 200),
-            Duration = duration or 10,
-        })
-    end)
-end
-
-local function log(msg)
-    print("[Rofl Hub] " .. tostring(msg))
-end
-
-log("Script started")
-
--- === MAIN SCRIPT ===
 local ok, err = pcall(function()
 
 local Players          = game:GetService("Players")
@@ -49,31 +17,8 @@ local LocalPlayer = Players.LocalPlayer
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local Camera      = workspace.CurrentCamera
 
-log("Variables loaded")
-
--- CLEANUP
-for _, obj in ipairs(workspace:GetDescendants()) do
-    if obj.Name == "RoflAnchoredPos" or obj.Name == "RoflAnchoredOr"
-    or obj.Name == "RoflAnchoredAtt" then
-        pcall(function() obj:Destroy() end)
-    end
-end
-
-for _, p in ipairs(Players:GetPlayers()) do
-    if p.Character then
-        for _, obj in ipairs(p.Character:GetDescendants()) do
-            if obj:IsA("Highlight") then pcall(function() obj:Destroy() end) end
-            if obj:IsA("BillboardGui") then pcall(function() obj:Destroy() end) end
-            if obj.Name == "RoflESP" or obj.Name == "RoflESPTag" then
-                pcall(function() obj:Destroy() end)
-            end
-        end
-    end
-end
-
--- CONFIG
 local HUB_NAME      = "Rofl Hub"
-local HUB_VERSION   = "v1.3"
+local HUB_VERSION   = "v1.5"
 
 local THEMES = {
     Blue   = { main = Color3.fromRGB(120, 170, 255), dark = Color3.fromRGB(70, 120, 200)  },
@@ -131,7 +76,6 @@ local ORIGINAL_LIGHTING = {
     OutdoorAmbient = Lighting.OutdoorAmbient,
 }
 
--- SKYBOX ASSETS (27 SKYBOXES)
 local SKYBOX_ASSETS = {
     ["Black Storm"] = {
         Bk = "rbxassetid://15502511288", Dn = "rbxassetid://15502508460",
@@ -285,7 +229,6 @@ do
     end
 end
 
--- STATE
 local activeTabName = "Visuals"
 local tabButtons, sections, themeButtons = {}, {}, {}
 local themeTargets  = {}
@@ -297,10 +240,12 @@ local skyboxDropdownRef = nil
 local openDropdowns = {}
 local ignoreGlobalClickUntil = 0
 
--- Anchored
 local anchoredEnabled = true
 local anchoredKey = Enum.KeyCode.B
 local anchoredTargets = {}
+
+local auraEnabled = true
+local auraRadius = 100
 
 local function markIgnoreNextClicks(dur)
     ignoreGlobalClickUntil = tick() + (dur or 0.1)
@@ -344,25 +289,21 @@ local function targetLabelText()
     return "Selected: " .. tostring(count)
 end
 
--- SKYBOX FUNCTIONS
 local function applySkybox(skyboxName)
     local data = SKYBOX_ASSETS[skyboxName]
     if not data then return end
-
     local sky = Lighting:FindFirstChildOfClass("Sky")
     if not sky then
         sky = Instance.new("Sky")
         sky.Name = "RoflSky"
         sky.Parent = Lighting
     end
-
     sky.SkyboxBk = data.Bk
     sky.SkyboxDn = data.Dn
     sky.SkyboxFt = data.Ft
     sky.SkyboxLf = data.Lf
     sky.SkyboxRt = data.Rt
     sky.SkyboxUp = data.Up
-
     currentSkybox = skyboxName
 end
 
@@ -373,7 +314,6 @@ local function restoreDefaultSky()
         sky.Name = "Sky"
         sky.Parent = Lighting
     end
-
     if DEFAULT_SKY_SETTINGS then
         sky.SkyboxBk = DEFAULT_SKY_SETTINGS.Bk
         sky.SkyboxDn = DEFAULT_SKY_SETTINGS.Dn
@@ -391,30 +331,11 @@ local function restoreDefaultSky()
     end
 end
 
--- ANCHORED SYSTEM
-local SetNetworkOwnerRemote = nil
+-- =====================================================
+-- [ANCHORED SECTION START]
+-- =====================================================
 
-local function findSetNetworkOwnerRemote()
-    if SetNetworkOwnerRemote and SetNetworkOwnerRemote.Parent then
-        return SetNetworkOwnerRemote
-    end
-    local ok, r = pcall(function()
-        local rs = game:GetService("ReplicatedStorage")
-        local grabEvents = rs:FindFirstChild("GrabEvents")
-        if grabEvents then
-            local remote = grabEvents:FindFirstChild("SetNetworkOwner")
-            if remote then
-                SetNetworkOwnerRemote = remote
-                return remote
-            end
-        end
-        return nil
-    end)
-    if ok then return r end
-    return nil
-end
-
-local function findCurrentlyHeldPart()
+local function getHeldTarget()
     local ok, part = pcall(function()
         local grabParts = workspace:FindFirstChild("GrabParts")
         if not grabParts then return nil end
@@ -422,10 +343,20 @@ local function findCurrentlyHeldPart()
         if not grabPart then return nil end
         local weld = grabPart:FindFirstChild("WeldConstraint")
         if not weld then return nil end
-        return weld.Part1
+        local p1 = weld.Part1
+        if not p1 or not p1.Parent then
+            p1 = weld.Part0
+        end
+        if not p1 or not p1.Parent or not p1:IsA("BasePart") then return nil end
+        return p1
     end)
-    if ok then return part end
-    return nil
+    if not ok or not part then return nil end
+
+    local model = part:FindFirstAncestorOfClass("Model")
+    if model and model ~= workspace then
+        return model
+    end
+    return part
 end
 
 local function isMapPart(part)
@@ -444,71 +375,84 @@ local function isMapPart(part)
     return false
 end
 
-local function forceOwnership(part)
-    if not part or not part.Parent then return end
-    local remote = findSetNetworkOwnerRemote()
-    if not remote then return end
-    pcall(function()
-        remote:FireServer(part, part.CFrame)
-    end)
-end
-
-local function attachHold(part)
-    if not part or not part.Parent then return nil end
+local function attachHold(target)
+    if not target then return nil end
 
     local ok, entry = pcall(function()
-        local fixedPos = part.Position
-        local fixedCF = part.CFrame
+        local mainPart = nil
+        local allParts = {}
+
+        if target:IsA("Model") then
+            mainPart = target.PrimaryPart
+            if not mainPart then
+                for _, child in ipairs(target:GetDescendants()) do
+                    if child:IsA("BasePart") then
+                        mainPart = child
+                        break
+                    end
+                end
+            end
+            for _, child in ipairs(target:GetDescendants()) do
+                if child:IsA("BasePart") then
+                    table.insert(allParts, child)
+                end
+            end
+        elseif target:IsA("BasePart") then
+            mainPart = target
+            allParts = {target}
+        else
+            return nil
+        end
+
+        if not mainPart then return nil end
+
+        local fixedPos = mainPart.Position
+        local fixedCF = mainPart.CFrame
+
+        for _, p in ipairs(allParts) do
+            for _, name in ipairs({"RoflAnchoredPos", "RoflAnchoredOr"}) do
+                pcall(function()
+                    local old = p:FindFirstChild(name)
+                    if old then old:Destroy() end
+                end)
+            end
+        end
+
+        local mass = 0
+        for _, p in ipairs(allParts) do
+            mass = mass + p.AssemblyMass
+        end
+        mass = math.max(mass, 1)
+
+        local maxForce = mass * workspace.Gravity * 500
+        maxForce = math.clamp(maxForce, 1e6, 1e10)
+
+        local bp = Instance.new("BodyPosition")
+        bp.Name = "RoflAnchoredPos"
+        bp.Position = fixedPos
+        bp.P = 500000
+        bp.D = 5000
+        bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
+        bp.Parent = mainPart
+
+        local bg = Instance.new("BodyGyro")
+        bg.Name = "RoflAnchoredOr"
+        bg.CFrame = fixedCF
+        bg.P = 500000
+        bg.D = 5000
+        bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+        bg.Parent = mainPart
 
         pcall(function()
-            local old = part:FindFirstChild("RoflAnchoredAtt")
-            if old then old:Destroy() end
-        end)
-        pcall(function()
-            local old = part:FindFirstChild("RoflAnchoredPos")
-            if old then old:Destroy() end
-        end)
-        pcall(function()
-            local old = part:FindFirstChild("RoflAnchoredOr")
-            if old then old:Destroy() end
-        end)
-
-        local att = Instance.new("Attachment")
-        att.Name = "RoflAnchoredAtt"
-        att.Parent = part
-
-        local ap = Instance.new("AlignPosition")
-        ap.Name = "RoflAnchoredPos"
-        ap.Mode = Enum.PositionAlignmentMode.OneAttachment
-        ap.Attachment0 = att
-        ap.Position = fixedPos
-        ap.MaxForce = 5000000
-        ap.MaxVelocity = 500
-        ap.Responsiveness = 200
-        ap.ApplyAtCenterOfMass = true
-        ap.Parent = part
-
-        local ao = Instance.new("AlignOrientation")
-        ao.Name = "RoflAnchoredOr"
-        ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
-        ao.Attachment0 = att
-        ao.CFrame = fixedCF
-        ao.MaxTorque = 2000000
-        ao.MaxAngularVelocity = 100
-        ao.Responsiveness = 200
-        ao.Parent = part
-
-        -- NOCLIP УБРАН — объект сталкивается с картой как обычно
-        pcall(function()
-            part.Anchored = false
+            mainPart:SetNetworkOwner(LocalPlayer)
         end)
 
         return {
-            alignPos = ap,
-            alignOr = ao,
-            att = att,
-            part = part,
-            savedCF = fixedCF,
+            bodyPos = bp,
+            bodyGyro = bg,
+            part = mainPart,
+            allParts = allParts,
+            isModel = target:IsA("Model"),
         }
     end)
 
@@ -518,13 +462,22 @@ end
 
 local function detachHold(entry)
     if not entry then return end
-    pcall(function() if entry.alignPos then entry.alignPos:Destroy() end end)
-    pcall(function() if entry.alignOr then entry.alignOr:Destroy() end end)
-    pcall(function() if entry.att then entry.att:Destroy() end end)
+    pcall(function() if entry.bodyPos then entry.bodyPos:Destroy() end end)
+    pcall(function() if entry.bodyGyro then entry.bodyGyro:Destroy() end end)
+    if entry.allParts then
+        for _, p in ipairs(entry.allParts) do
+            pcall(function()
+                for _, name in ipairs({"RoflAnchoredPos", "RoflAnchoredOr"}) do
+                    local old = p:FindFirstChild(name)
+                    if old then old:Destroy() end
+                end
+            end)
+        end
+    end
 end
 
 local function releaseAllAnchored()
-    for part, entry in pairs(anchoredTargets) do
+    for target, entry in pairs(anchoredTargets) do
         detachHold(entry)
     end
     anchoredTargets = {}
@@ -533,30 +486,37 @@ end
 local function toggleAnchoredGrab()
     if not anchoredEnabled then return end
 
-    local part = findCurrentlyHeldPart()
+    local target = getHeldTarget()
+    if not target then return end
 
-    if part and anchoredTargets[part] then
-        detachHold(anchoredTargets[part])
-        anchoredTargets[part] = nil
+    if anchoredTargets[target] then
+        detachHold(anchoredTargets[target])
+        anchoredTargets[target] = nil
+        showToast("Anchored", "Unfrozen")
         return
     end
 
-    if part then
-        if isMapPart(part) then
-            showToast("Anchored", "Нельзя морозить карту!")
-            return
+    local isMap = false
+    if target:IsA("Model") then
+        for _, p in ipairs(target:GetDescendants()) do
+            if p:IsA("BasePart") and isMapPart(p) then
+                isMap = true
+                break
+            end
         end
+    else
+        isMap = isMapPart(target)
+    end
 
-        local entry = attachHold(part)
-        if entry then
-            anchoredTargets[part] = entry
-            forceOwnership(part)
-        end
+    if isMap then
+        showToast("Anchored", "Cannot freeze the map!")
         return
     end
 
-    if next(anchoredTargets) then
-        releaseAllAnchored()
+    local entry = attachHold(target)
+    if entry then
+        anchoredTargets[target] = entry
+        showToast("Anchored", "Frozen")
     end
 end
 
@@ -569,91 +529,50 @@ addConn(UserInputService.InputBegan:Connect(function(input, gpe)
     end
 end))
 
--- ============================================================
--- RECOVERY THREAD (RenderStepped — каждый кадр, без NOCLIP)
--- Приоритет: мгновенный возврат при потере владения
--- ============================================================
-addConn(RunService.RenderStepped:Connect(function()
+local function auraTick()
+    if not auraEnabled then return end
     if not anchoredEnabled then return end
-    if not next(anchoredTargets) then return end
 
-    for part, entry in pairs(anchoredTargets) do
-        if not part or not part.Parent then
-            anchoredTargets[part] = nil
-        else
-            -- 1. Мгновенно возвращаем владельца, если его увели
-            local partOwner = part:FindFirstChild("PartOwner")
-            local stolen = false
+    local char = LocalPlayer.Character
+    if not char then return end
+    local myHRP = char:FindFirstChild("HumanoidRootPart")
+    if not myHRP then return end
 
-            if partOwner and partOwner.Value ~= LocalPlayer.Name then
-                stolen = true
-            end
+    local myPos = myHRP.Position
+    local radius = auraRadius
 
-            if not stolen then
+    for target, entry in pairs(anchoredTargets) do
+        local part = entry.part
+        if part and part.Parent then
+            local dist = (part.Position - myPos).Magnitude
+            if dist <= radius then
+                local currentOwner = nil
                 pcall(function()
-                    local ok, owner = pcall(function()
-                        return part:GetNetworkOwner()
-                    end)
-                    if ok and owner and owner ~= LocalPlayer then
-                        stolen = true
-                    end
+                    currentOwner = part:GetNetworkOwner()
                 end)
-            end
-
-            if stolen then
-                forceOwnership(part)
-
-                pcall(function()
-                    part.CFrame = CFrame.new(entry.alignPos.Position)
-                        * (entry.savedCF - entry.savedCF.Position)
-                    part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                    part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                end)
-
-                pcall(function()
-                    entry.alignPos.Position = entry.savedCF.Position
-                end)
-            else
-                -- 2. Гасим скорость постоянно
-                pcall(function()
-                    if part.AssemblyLinearVelocity.Magnitude > 0.5 then
-                        part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                    end
-                    if part.AssemblyAngularVelocity.Magnitude > 0.5 then
-                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                    end
-                end)
-
-                -- 3. Если сильно ушёл — возвращаем
-                local dist = (part.Position - entry.alignPos.Position).Magnitude
-                if dist > 2 then
+                if currentOwner ~= LocalPlayer then
                     pcall(function()
-                        part.CFrame = CFrame.new(entry.alignPos.Position)
-                            * (entry.savedCF - entry.savedCF.Position)
+                        part:SetNetworkOwner(LocalPlayer)
+                    end)
+                    pcall(function()
                         part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                     end)
-                    forceOwnership(part)
                 end
-
-                -- 4. Мягкое восстановление угла
-                pcall(function()
-                    local currentRot = part.CFrame - part.CFrame.Position
-                    local savedRot = entry.savedCF - entry.savedCF.Position
-                    local dot = currentRot.LookVector:Dot(savedRot.LookVector)
-                    dot = math.clamp(dot, -1, 1)
-                    local angleDiff = math.deg(math.acos(dot))
-                    if angleDiff > 30 then
-                        part.CFrame = CFrame.new(part.Position) * savedRot
-                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                    end
-                end)
             end
+        else
+            anchoredTargets[target] = nil
         end
     end
-end))
+end
 
--- SCREEN GUI
+addConn(RunService.RenderStepped:Connect(auraTick))
+addConn(RunService.Heartbeat:Connect(auraTick))
+
+-- =====================================================
+-- [ANCHORED SECTION END]
+-- =====================================================
+
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "RoflHub"
 ScreenGui.ResetOnSpawn = false
@@ -674,7 +593,6 @@ ModalBtn.Visible = false
 ModalBtn.ZIndex = 1
 ModalBtn.Parent = ScreenGui
 
--- BLUR
 for _, obj in ipairs(Lighting:GetChildren()) do
     if obj:IsA("BlurEffect") then pcall(function() obj:Destroy() end) end
 end
@@ -699,7 +617,6 @@ addConn(RunService.RenderStepped:Connect(function()
     elseif blurTarget == 0 and Blur.Size > 5 then setBlur(0) end
 end))
 
--- TOASTS
 local toastContainer = Instance.new("Frame")
 toastContainer.Name = "ToastContainer"
 toastContainer.AnchorPoint = Vector2.new(1, 0)
@@ -782,7 +699,6 @@ local function showToast(title, subtitle)
     end)
 end
 
--- MAIN WINDOW
 local Window = Instance.new("Frame")
 Window.Name = "Window"
 Window.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -830,7 +746,6 @@ TopAccent.ZIndex = 5
 TopAccent.Parent = Window
 registerTheme(TopAccent, "BackgroundColor3", "accent")
 
--- DRAG STRIPS
 local function makeDragStrip(name, size, position)
     local strip = Instance.new("Frame")
     strip.Name = name
@@ -888,7 +803,6 @@ end
 addConn(UserInputService.InputChanged:Connect(updateDrag))
 addConn(UserInputService.InputEnded:Connect(endDrag))
 
--- TITLE BAR
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 52)
 TitleBar.BackgroundColor3 = PANEL_COLOR
@@ -1004,6 +918,36 @@ VersionLabel.ZIndex = 3
 VersionLabel.Parent = TitleBar
 registerTheme(VersionLabel, "TextColor3", "accent")
 
+local FpsLabel = Instance.new("TextLabel")
+FpsLabel.Name = "FpsLabel"
+FpsLabel.Size = UDim2.new(0, 55, 0, 18)
+FpsLabel.Position = UDim2.new(1, -128, 0.5, -9)
+FpsLabel.BackgroundTransparency = 1
+FpsLabel.Text = "60 FPS"
+FpsLabel.TextColor3 = SUBTEXT_COLOR
+FpsLabel.Font = Enum.Font.GothamBold
+FpsLabel.TextSize = 12
+FpsLabel.TextXAlignment = Enum.TextXAlignment.Right
+FpsLabel.TextYAlignment = Enum.TextYAlignment.Center
+FpsLabel.Visible = false
+FpsLabel.ZIndex = 4
+FpsLabel.Parent = TitleBar
+
+local _fpsFrames = 0
+local _fpsTime = 0
+addConn(RunService.RenderStepped:Connect(function(dt)
+    _fpsFrames = _fpsFrames + 1
+    _fpsTime = _fpsTime + dt
+    if _fpsTime >= 0.5 then
+        if FpsLabel and FpsLabel.Parent and FpsLabel.Visible then
+            local fps = math.floor(_fpsFrames / _fpsTime)
+            FpsLabel.Text = tostring(fps) .. " FPS"
+        end
+        _fpsFrames = 0
+        _fpsTime = 0
+    end
+end))
+
 local MinBtn = Instance.new("TextButton")
 MinBtn.Size = UDim2.new(0, 28, 0, 28)
 MinBtn.Position = UDim2.new(1, -70, 0.5, -14)
@@ -1054,7 +998,6 @@ addConn(CloseBtn.MouseLeave:Connect(function()
     TweenService:Create(CloseBtn, TweenInfo.new(0.12), {BackgroundTransparency = 0.3, BackgroundColor3 = BTN_COLOR}):Play()
 end))
 
--- RIPPLE
 local function spawnRipple(parentFrame, xRatio, yRatio)
     local ripple = Instance.new("Frame")
     ripple.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -1092,7 +1035,6 @@ local function attachRipple(obj)
     end))
 end
 
--- SIDEBAR
 local Sidebar = Instance.new("Frame")
 Sidebar.Size = UDim2.new(0, 155, 1, -80)
 Sidebar.Position = UDim2.new(0, 12, 0, 62)
@@ -1123,7 +1065,6 @@ SidebarPad.PaddingLeft = UDim.new(0, 8)
 SidebarPad.PaddingRight = UDim.new(0, 8)
 SidebarPad.Parent = Sidebar
 
--- CONTENT
 local Content = Instance.new("Frame")
 Content.Size = UDim2.new(1, -190, 1, -88)
 Content.Position = UDim2.new(0, 177, 0, 62)
@@ -1183,7 +1124,6 @@ ScrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ScrollLayout.Padding = UDim.new(0, 8)
 ScrollLayout.Parent = Scroll
 
--- TAB SYSTEM
 local function fadeInSection(section)
     local snapshots = {}
     for _, obj in ipairs(section:GetDescendants()) do
@@ -1353,7 +1293,6 @@ local function createTab(tabName, iconEmoji)
     return section
 end
 
--- WIDGETS
 local function addLabel(parent, text, subtext)
     local holder = Instance.new("Frame")
     holder.Size = UDim2.new(1, 0, 0, subtext and 46 or 26)
@@ -1399,6 +1338,49 @@ local function addLabel(parent, text, subtext)
         sub.ZIndex = 3
         sub.Parent = holder
     end
+    return holder
+end
+
+local function addInfoBlock(parent, text)
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.new(1, 0, 0, 0)
+    holder.AutomaticSize = Enum.AutomaticSize.Y
+    holder.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+    holder.BackgroundTransparency = 0.3
+    holder.ZIndex = 3
+    holder.Parent = parent
+
+    local holderCorner = Instance.new("UICorner")
+    holderCorner.CornerRadius = UDim.new(0, 8)
+    holderCorner.Parent = holder
+
+    local holderStroke = Instance.new("UIStroke")
+    holderStroke.Color = Color3.fromRGB(58, 58, 74)
+    holderStroke.Thickness = 1
+    holderStroke.Transparency = 0.5
+    holderStroke.Parent = holder
+
+    local holderPad = Instance.new("UIPadding")
+    holderPad.PaddingTop = UDim.new(0, 8)
+    holderPad.PaddingBottom = UDim.new(0, 8)
+    holderPad.PaddingLeft = UDim.new(0, 10)
+    holderPad.PaddingRight = UDim.new(0, 10)
+    holderPad.Parent = holder
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 0, 0)
+    lbl.AutomaticSize = Enum.AutomaticSize.Y
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = SUBTEXT_COLOR
+    lbl.Font = Enum.Font.Gotham
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Top
+    lbl.TextWrapped = true
+    lbl.ZIndex = 3
+    lbl.Parent = holder
+
     return holder
 end
 
@@ -1607,7 +1589,6 @@ local function addToggle(parent, text, iconEmoji, defaultState, callback)
     return {button = btn, setState = setState, isOn = function() return state end}
 end
 
--- DROPDOWN
 local function addDropdown(parent, labelText, options, defaultIndex, onChanged, config)
     config = config or {}
     local showAvatar = config.showAvatar or false
@@ -1966,7 +1947,6 @@ local function addDropdown(parent, labelText, options, defaultIndex, onChanged, 
     return self
 end
 
--- MULTI-SELECT DROPDOWN
 local function addMultiSelectDropdown(parent, labelText, getOptions, onChanged)
     local holder = Instance.new("Frame")
     holder.Size = UDim2.new(1, 0, 0, 60)
@@ -2363,7 +2343,6 @@ local function addMultiSelectDropdown(parent, labelText, getOptions, onChanged)
     return self
 end
 
--- GLOBAL INPUT
 local function handleGlobalClick(mx, my)
     if tick() < ignoreGlobalClickUntil then return end
 
@@ -2426,7 +2405,6 @@ addConn(UserInputService.InputChanged:Connect(function(input)
     end
 end))
 
--- THEME BUTTON
 local function addThemeButton(parent, themeName)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 36)
@@ -2503,7 +2481,6 @@ local function addThemeButton(parent, themeName)
     return btn
 end
 
--- KEYBIND
 local function addKeybind(parent, labelText, defaultKey, onChanged)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 38)
@@ -2731,7 +2708,6 @@ local function addResetOption(parent, text)
     }
 end
 
--- ESP SYSTEM
 local espEnabled       = false
 local espShowName      = true
 local espShowDistance  = false
@@ -2992,19 +2968,16 @@ task.spawn(function()
     end
 end)
 
--- BUILD TABS
 local visualsTab  = createTab("Visuals",  "📷")
 local espTab      = createTab("ESP",      "👁")
 local funTab      = createTab("Fun",      "🎮")
-local settingsTab = createTab("Настройки", "⚙")
+local settingsTab = createTab("Settings", "⚙")
 
--- CAMERA
 addLabel(visualsTab, "Camera", "Adjust how much you see on screen")
 addSlider(visualsTab, "Field of View", MIN_FOV, MAX_FOV, Camera.FieldOfView, "", function(v)
     Camera.FieldOfView = v
 end, function(setter, default) fovResetCallback = function() setter(default) end end)
 
--- LIGHTING
 addLabel(visualsTab, "Lighting", "Visual tweaks for clarity")
 
 local fullbrightToggle = addToggle(visualsTab, "Fullbright", "💡", false, function(state)
@@ -3029,7 +3002,6 @@ local noShadowsToggle = addToggle(visualsTab, "No Shadows", "☀", false, functi
     end
 end)
 
--- WORLD TIME
 addLabel(visualsTab, "World", "Change time of day")
 addSlider(visualsTab, "Time (hours)", MIN_TIME, MAX_TIME, Lighting.ClockTime, "h", function(v)
     Lighting.ClockTime = v
@@ -3037,7 +3009,6 @@ end, function(setter, default)
     timeResetCallback = function() setter(ORIGINAL_LIGHTING.ClockTime) end
 end)
 
--- SKYBOX
 addLabel(visualsTab, "Skybox", "27 skyboxes available")
 
 local skyboxNames = {}
@@ -3080,7 +3051,6 @@ addActionButton(visualsTab, "Random Skybox", "🎲", function()
     showToast("Random Skybox", randomName)
 end)
 
--- ESP TAB
 addLabel(espTab, "Players", "See players through walls")
 
 local espMainToggle = addToggle(espTab, "Player ESP", "👁", false, function(state)
@@ -3145,7 +3115,8 @@ local espFillSlider = addSlider(espTab, "Fill Transparency", 0, 100, math.floor(
     reapplyESPVisuals()
 end)
 
--- FUN TAB
+addLabel(funTab, "Anchored", "Hold an object and press B to freeze it")
+
 local anchoredToggle = addToggle(funTab, "Anchored", "🧊", true, function(state)
     anchoredEnabled = state
     if not state then releaseAllAnchored() end
@@ -3160,7 +3131,18 @@ addActionButton(funTab, "Release All", "📤", function()
     showToast("Anchored", "All released")
 end)
 
--- SETTINGS TAB
+addInfoBlock(funTab, "In this version, you cannot anchor other players yet. This feature is not implemented.")
+
+addLabel(funTab, "Anchor Aura", "Reclaims ownership of frozen objects near you")
+
+addToggle(funTab, "Aura Enabled", "🛡", true, function(state)
+    auraEnabled = state
+end)
+
+addSlider(funTab, "Aura Radius", 10, 100, 100, " studs", function(v)
+    auraRadius = v
+end)
+
 addLabel(settingsTab, "Keybind", "Click the box, then press a key")
 addKeybind(settingsTab, "Toggle menu", toggleKey, function(newKey)
     toggleKey = newKey
@@ -3168,7 +3150,12 @@ end)
 
 addLabel(settingsTab, "Interface", "Extra widgets for the hub")
 addToggle(settingsTab, "Show FPS", "📊", false, function(state)
-    FpsLabel.Visible = state
+    if FpsLabel then
+        FpsLabel.Visible = state
+        if state then
+            FpsLabel.Text = "60 FPS"
+        end
+    end
 end)
 
 local function doResetVisuals()
@@ -3260,7 +3247,6 @@ for _, data in ipairs(tabButtons) do
 end
 sections["Visuals"].Visible = true
 
--- THEME
 local function refreshActiveTabsAnimated()
     for _, data in ipairs(tabButtons) do
         if data.name == activeTabName then
@@ -3343,7 +3329,6 @@ end
 refreshActiveTabsAnimated()
 refreshThemeButtonsAnimated()
 
--- RUNTIME STATE
 local menuOpen       = true
 local savedRotation  = nil
 local camLoopBound   = false
@@ -3545,11 +3530,63 @@ end))
 
 openMenu()
 
-log("Script finished OK")
-
 end)
 
+-- ============================================================
+-- [VISIBLE ERROR HANDLER]
+-- Shows error directly in game, even if SetCore fails
+-- ============================================================
 if not ok then
-    notify("ОШИБКА Rofl Hub", tostring(err), 30)
-    warn("[Rofl Hub ERROR] " .. tostring(err))
+    local PlayerGui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    local eg = Instance.new("ScreenGui")
+    eg.Name = "RoflHubError"
+    eg.ResetOnSpawn = false
+    eg.Parent = PlayerGui
+
+    local ef = Instance.new("Frame")
+    ef.Size = UDim2.new(0, 500, 0, 240)
+    ef.Position = UDim2.new(0.5, -250, 0.5, -120)
+    ef.BackgroundColor3 = Color3.fromRGB(40, 0, 0)
+    ef.BorderSizePixel = 0
+    ef.ZIndex = 100
+    ef.Parent = eg
+
+    local ec = Instance.new("UICorner")
+    ec.CornerRadius = UDim.new(0, 12)
+    ec.Parent = ef
+
+    local es = Instance.new("UIStroke")
+    es.Color = Color3.fromRGB(220, 70, 70)
+    es.Thickness = 2
+    es.Parent = ef
+
+    local et = Instance.new("TextLabel")
+    et.Size = UDim2.new(1, -20, 1, -20)
+    et.Position = UDim2.new(0, 10, 0, 10)
+    et.BackgroundTransparency = 1
+    et.Text = "Rofl Hub ERROR:\n\n" .. tostring(err)
+    et.TextColor3 = Color3.fromRGB(255, 200, 200)
+    et.Font = Enum.Font.Code
+    et.TextSize = 14
+    et.TextXAlignment = Enum.TextXAlignment.Left
+    et.TextYAlignment = Enum.TextYAlignment.Top
+    et.TextWrapped = true
+    et.ZIndex = 101
+    et.Parent = ef
+
+    local eb = Instance.new("TextButton")
+    eb.Size = UDim2.new(0, 100, 0, 30)
+    eb.Position = UDim2.new(1, -110, 1, -40)
+    eb.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    eb.BorderSizePixel = 0
+    eb.Text = "CLOSE"
+    eb.TextColor3 = Color3.fromRGB(255, 255, 255)
+    eb.Font = Enum.Font.GothamBold
+    eb.TextSize = 14
+    eb.ZIndex = 102
+    eb.Parent = ef
+
+    eb.MouseButton1Click:Connect(function()
+        eg:Destroy()
+    end)
 end
