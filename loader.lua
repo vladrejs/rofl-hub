@@ -1,5 +1,6 @@
 -- Rofl Hub | loader.lua
--- Точка входа с красной консолью ошибок
+-- Точка входа. Скачивает и запускает все модули.
+-- При ошибке показывает красную консоль.
 
 local base = "https://raw.githubusercontent.com/vladrejs/rofl-hub/main/"
 
@@ -11,7 +12,6 @@ local function showErrorConsole(moduleName, errText)
     local LocalPlayer = Players.LocalPlayer
     local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-    -- Удаляем предыдущую, если есть
     local oldGui = PlayerGui:FindFirstChild("RoflHubErrorConsole")
     if oldGui then oldGui:Destroy() end
 
@@ -42,7 +42,6 @@ local function showErrorConsole(moduleName, errText)
     FrameStroke.Thickness = 1.5
     FrameStroke.Parent = Frame
 
-    -- Заголовок
     local TitleBar = Instance.new("Frame")
     TitleBar.Size = UDim2.new(1, 0, 0, 40)
     TitleBar.BackgroundColor3 = Color3.fromRGB(45, 15, 15)
@@ -66,7 +65,7 @@ local function showErrorConsole(moduleName, errText)
     Icon.Size = UDim2.new(0, 30, 1, 0)
     Icon.Position = UDim2.new(0, 12, 0, 0)
     Icon.BackgroundTransparency = 1
-    Icon.Text = "⚠"
+    Icon.Text = "!"
     Icon.TextColor3 = Color3.fromRGB(255, 100, 100)
     Icon.Font = Enum.Font.GothamBold
     Icon.TextSize = 18
@@ -86,7 +85,6 @@ local function showErrorConsole(moduleName, errText)
     TitleLabel.ZIndex = 3
     TitleLabel.Parent = TitleBar
 
-    -- Кнопка закрытия
     local CloseBtn = Instance.new("TextButton")
     CloseBtn.Size = UDim2.new(0, 28, 0, 28)
     CloseBtn.Position = UDim2.new(1, -38, 0.5, -14)
@@ -114,7 +112,6 @@ local function showErrorConsole(moduleName, errText)
         ScreenGui:Destroy()
     end)
 
-    -- Текст ошибки (скроллящийся)
     local Scroll = Instance.new("ScrollingFrame")
     Scroll.Size = UDim2.new(1, -24, 1, -60)
     Scroll.Position = UDim2.new(0, 12, 0, 48)
@@ -142,12 +139,11 @@ local function showErrorConsole(moduleName, errText)
     ErrorText.ZIndex = 4
     ErrorText.Parent = Scroll
 
-    -- Нижняя плашка с подсказкой
     local Hint = Instance.new("TextLabel")
     Hint.Size = UDim2.new(1, -24, 0, 20)
     Hint.Position = UDim2.new(0, 12, 1, -26)
     Hint.BackgroundTransparency = 1
-    Hint.Text = "Send this error to the developer. Close the console with ✕ to continue."
+    Hint.Text = "Send this error to the developer. Close the console with X to continue."
     Hint.TextColor3 = Color3.fromRGB(180, 120, 120)
     Hint.Font = Enum.Font.Gotham
     Hint.TextSize = 11
@@ -155,7 +151,6 @@ local function showErrorConsole(moduleName, errText)
     Hint.ZIndex = 3
     Hint.Parent = Frame
 
-    -- Drag окна за заголовок
     local dragging, dragStart, startPos = false, nil, nil
     TitleBar.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -180,7 +175,7 @@ local function showErrorConsole(moduleName, errText)
     end)
 end
 
--- ==================== MODULES LOADER ====================
+-- ==================== LOAD MODULES ====================
 local modules = {
     "config.lua",
     "ui.lua",
