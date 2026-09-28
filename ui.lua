@@ -250,6 +250,51 @@ AccentLine.ZIndex = 3
 AccentLine.Parent = TitleBar
 UI.AccentLine = AccentLine
 
+-- Logo / Avatar
+local LogoFrame = Instance.new("Frame")
+LogoFrame.Size = UDim2.new(0, 32, 0, 32)
+LogoFrame.Position = UDim2.new(0, 14, 0.5, -16)
+LogoFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+LogoFrame.BorderSizePixel = 0
+LogoFrame.ZIndex = 3
+LogoFrame.Parent = TitleBar
+
+local LogoCorner = Instance.new("UICorner")
+LogoCorner.CornerRadius = UDim.new(1, 0)
+LogoCorner.Parent = LogoFrame
+
+local LogoStroke = Instance.new("UIStroke")
+LogoStroke.Color = Hub.Accent
+LogoStroke.Thickness = 1.5
+LogoStroke.Parent = LogoFrame
+UI.LogoStroke = LogoStroke
+
+local LogoImage = Instance.new("ImageLabel")
+LogoImage.Size = UDim2.new(1, -2, 1, -2)
+LogoImage.Position = UDim2.new(0, 1, 0, 1)
+LogoImage.BackgroundTransparency = 1
+LogoImage.Image = "rbxasset://textures/ui/GuiImagePlaceholder.png"
+LogoImage.ZIndex = 4
+LogoImage.Parent = LogoFrame
+UI.LogoImage = LogoImage
+
+local LogoImageCorner = Instance.new("UICorner")
+LogoImageCorner.CornerRadius = UDim.new(1, 0)
+LogoImageCorner.Parent = LogoImage
+
+task.spawn(function()
+    local ok, url = pcall(function()
+        return Players:GetUserThumbnailAsync(
+            LocalPlayer.UserId,
+            Enum.ThumbnailType.HeadShot,
+            Enum.ThumbnailSize.Size100x100
+        )
+    end)
+    if ok and url and LogoImage then
+        LogoImage.Image = url
+    end
+end)
+
 local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(0, 100, 0, 18)
 TitleLabel.Position = UDim2.new(0, 54, 0, 12)
@@ -1189,4 +1234,4 @@ local function addThemeButton(parent, themeName)
 end
 UI.addThemeButton = addThemeButton
 
-Hub.log("ui.lua loaded")
+Hub.log("ui.lua loaded")ц
