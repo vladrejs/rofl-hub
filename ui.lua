@@ -1,5 +1,5 @@
 -- Rofl Hub | ui.lua
--- Окно, сайдбар, все виджеты
+-- Window, sidebar, widgets
 
 local Hub = _G.RoflHub or {}
 _G.RoflHub = Hub
@@ -39,7 +39,6 @@ ScreenGui.DisplayOrder = 999
 ScreenGui.Parent = PlayerGui
 UI.ScreenGui = ScreenGui
 
--- Blur
 for _, obj in ipairs(game:GetService("Lighting"):GetChildren()) do
     if obj:IsA("BlurEffect") then pcall(function() obj:Destroy() end) end
 end
@@ -63,7 +62,6 @@ addConn(RunService.RenderStepped:Connect(function()
     elseif blurTarget == 0 and Blur.Size > 5 then UI.setBlur(0) end
 end))
 
--- Modal (backdrop)
 local ModalBtn = Instance.new("TextButton")
 ModalBtn.Name = "RoflHubModal"
 ModalBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -356,7 +354,7 @@ MinBtn.Position = UDim2.new(1, -70, 0.5, -14)
 MinBtn.BackgroundColor3 = Colors.btn
 MinBtn.BackgroundTransparency = 0.3
 MinBtn.BorderSizePixel = 0
-MinBtn.Text = "—"
+MinBtn.Text = "-"
 MinBtn.TextColor3 = Colors.text
 MinBtn.Font = Enum.Font.GothamBold
 MinBtn.TextSize = 16
@@ -381,7 +379,7 @@ CloseBtn.Position = UDim2.new(1, -36, 0.5, -14)
 CloseBtn.BackgroundColor3 = Colors.btn
 CloseBtn.BackgroundTransparency = 0.3
 CloseBtn.BorderSizePixel = 0
-CloseBtn.Text = "✕"
+CloseBtn.Text = "X"
 CloseBtn.TextColor3 = Colors.text
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.TextSize = 13
@@ -1234,4 +1232,4 @@ local function addThemeButton(parent, themeName)
 end
 UI.addThemeButton = addThemeButton
 
-Hub.log("ui.lua loaded")ц
+Hub.log("ui.lua loaded")
