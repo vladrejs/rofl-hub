@@ -1,5 +1,5 @@
 -- Rofl Hub | config.lua
--- Общие данные для всех модулей
+-- Common data for all modules
 
 local Hub = _G.RoflHub or {}
 _G.RoflHub = Hub
@@ -181,7 +181,6 @@ Hub.SkyboxAssets = {
     },
 }
 
--- Сохраняем дефолтный скайбокс
 Hub.DefaultSkySettings = nil
 do
     local existingSky = game:GetService("Lighting"):FindFirstChildOfClass("Sky")
@@ -197,7 +196,6 @@ do
     end
 end
 
--- Общее состояние
 Hub.State = {
     activeTabName = "Visuals",
     tabButtons    = {},
@@ -213,6 +211,13 @@ Hub.State = {
 function Hub.addConn(c)
     table.insert(Hub.State.connections, c)
     return c
+end
+
+function Hub.registerTheme(obj, property, kind, extra)
+    local entry = { obj = obj, property = property, kind = kind }
+    if extra then for k, v in pairs(extra) do entry[k] = v end end
+    table.insert(Hub.State.themeTargets, entry)
+    return entry
 end
 
 function Hub.showToast(title, subtitle)
